@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+
+# Streamlit
+.streamlit/
+
+# Temporary files
+temp_*
+*.tmp
+*.temp
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Model files (these are large, we'll track them separately)
+model/
+model_*/
+
+# Output files
+*_transcript.txt
+*_summary.md
+
+# Logs
+*.log
