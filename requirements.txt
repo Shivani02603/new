@@ -1,3 +1,6 @@
 vosk
 typer
 rich
+streamlit
+requests
+pandas
