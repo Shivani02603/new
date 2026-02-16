@@ -1,6 +1,7 @@
 import os
 import wave
 import json
+import re
 from vosk import Model, KaldiRecognizer
 
 class VoskTranscriber:
@@ -8,6 +9,24 @@ class VoskTranscriber:
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model path '{model_path}' does not exist.")
         self.model = Model(model_path)
+
+    def _clean_text(self, text: str) -> str:
+        """Clean text to remove invalid Unicode characters and surrogates"""
+        if not text:
+            return ""
+        
+        try:
+            # Remove or replace surrogate characters
+            cleaned = text.encode('utf-8', errors='ignore').decode('utf-8')
+            # Remove control characters except newlines and tabs
+            cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', cleaned)
+            # Normalize whitespace
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            return cleaned
+        except Exception as e:
+            print(f"Warning: Text cleaning failed: {e}")
+            # Fallback: keep only ASCII characters
+            return ''.join(char for char in text if ord(char) < 128).strip()
 
     def transcribe(self, audio_file_path: str) -> str:
         """Standard transcription without timestamps"""
@@ -42,18 +61,31 @@ class VoskTranscriber:
                     if len(data) == 0:
                         break
                     if rec.AcceptWaveform(data):
-                        result = rec.Result()
-                        result_dict = json.loads(result)
-                        if 'text' in result_dict:
-                            transcript_parts.append(result_dict['text'])
+                        try:
+                            result = rec.Result()
+                            result_dict = json.loads(result)
+                            if 'text' in result_dict and result_dict['text'].strip():
+                                clean_text = self._clean_text(result_dict['text'])
+                                if clean_text:
+                                    transcript_parts.append(clean_text)
+                        except (json.JSONDecodeError, UnicodeError) as e:
+                            print(f"Warning: Skipping invalid result: {e}")
+                            continue
 
                 # Get the final result
-                final_result = rec.FinalResult()
-                final_result_dict = json.loads(final_result)
-                if 'text' in final_result_dict:
-                    transcript_parts.append(final_result_dict['text'])
+                try:
+                    final_result = rec.FinalResult()
+                    final_result_dict = json.loads(final_result)
+                    if 'text' in final_result_dict and final_result_dict['text'].strip():
+                        clean_text = self._clean_text(final_result_dict['text'])
+                        if clean_text:
+                            transcript_parts.append(clean_text)
+                except (json.JSONDecodeError, UnicodeError) as e:
+                    print(f"Warning: Final result parsing failed: {e}")
 
-                return " ".join(transcript_parts).strip()
+                # Join and clean the final transcript
+                final_transcript = " ".join(transcript_parts).strip()
+                return self._clean_text(final_transcript)
         finally:
             # Clean up converted file if it was created
             if converted_file_path and os.path.exists(converted_file_path):
@@ -96,50 +128,63 @@ class VoskTranscriber:
                         break
                     
                     if rec.AcceptWaveform(data):
-                        result = rec.Result()
-                        result_dict = json.loads(result)
-                        
-                        if 'result' in result_dict:
-                            words = result_dict['result']
-                            for word_info in words:
-                                timestamped_words.append({
-                                    'word': word_info['word'],
-                                    'start': word_info['start'],
-                                    'end': word_info['end'],
-                                    'confidence': word_info.get('conf', 1.0)
-                                })
-                                current_segment.append(word_info['word'])
+                        try:
+                            result = rec.Result()
+                            result_dict = json.loads(result)
                             
-                            if current_segment:
-                                transcript_segments.append({
-                                    'text': ' '.join(current_segment),
-                                    'start': current_start_time,
-                                    'end': timestamped_words[-1]['end'] if timestamped_words else current_start_time,
-                                    'words': len(current_segment)
-                                })
-                                current_segment = []
-                                current_start_time = timestamped_words[-1]['end'] if timestamped_words else current_start_time
+                            if 'result' in result_dict:
+                                words = result_dict['result']
+                                for word_info in words:
+                                    clean_word = self._clean_text(word_info.get('word', ''))
+                                    if clean_word:  # Only add non-empty words
+                                        timestamped_words.append({
+                                            'word': clean_word,
+                                            'start': word_info.get('start', 0),
+                                            'end': word_info.get('end', 0),
+                                            'confidence': word_info.get('conf', 1.0)
+                                        })
+                                        current_segment.append(clean_word)
+                                
+                                if current_segment:
+                                    segment_text = ' '.join(current_segment)
+                                    transcript_segments.append({
+                                        'text': self._clean_text(segment_text),
+                                        'start': current_start_time,
+                                        'end': timestamped_words[-1]['end'] if timestamped_words else current_start_time,
+                                        'words': len(current_segment)
+                                    })
+                                    current_segment = []
+                                    current_start_time = timestamped_words[-1]['end'] if timestamped_words else current_start_time
+                        except (json.JSONDecodeError, UnicodeError, KeyError) as e:
+                            print(f"Warning: Skipping invalid timestamped result: {e}")
+                            continue
 
                 # Get final result
-                final_result = rec.FinalResult()
-                final_result_dict = json.loads(final_result)
-                
-                if 'result' in final_result_dict:
-                    words = final_result_dict['result']
-                    for word_info in words:
-                        timestamped_words.append({
-                            'word': word_info['word'],
-                            'start': word_info['start'],
-                            'end': word_info['end'],
-                            'confidence': word_info.get('conf', 1.0)
-                        })
+                try:
+                    final_result = rec.FinalResult()
+                    final_result_dict = json.loads(final_result)
+                    
+                    if 'result' in final_result_dict:
+                        words = final_result_dict['result']
+                        for word_info in words:
+                            clean_word = self._clean_text(word_info.get('word', ''))
+                            if clean_word:
+                                timestamped_words.append({
+                                    'word': clean_word,
+                                    'start': word_info.get('start', 0),
+                                    'end': word_info.get('end', 0),
+                                    'confidence': word_info.get('conf', 1.0)
+                                })
+                except (json.JSONDecodeError, UnicodeError, KeyError) as e:
+                    print(f"Warning: Final timestamped result parsing failed: {e}")
 
                 # Generate formatted transcript with timestamps
                 formatted_transcript = self._format_timestamped_transcript(timestamped_words)
                 full_text = ' '.join([w['word'] for w in timestamped_words])
+                clean_full_text = self._clean_text(full_text)
 
                 return {
-                    'full_transcript': full_text,
+                    'full_transcript': clean_full_text,
                     'timestamped_transcript': formatted_transcript,
                     'timestamped_words': timestamped_words,
                     'segments': transcript_segments,

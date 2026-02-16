@@ -343,7 +343,7 @@ if uploaded_file is not None:
                 
                 custom_prompt = st.text_area(
                     "Enter your custom prompt:",
-                    value=\"\"\"Meeting Transcript:
+                    value="""Meeting Transcript:
 {transcript}
 
 Create a custom summary with:
@@ -353,7 +353,7 @@ Create a custom summary with:
 • Your custom point 2
 
 **SECTION 2**  
-• Another custom section\"\"\",
+• Another custom section""",
                     height=200,
                     help="Design your own summary format. Use {transcript} placeholder."
                 )
@@ -377,9 +377,17 @@ Create a custom summary with:
         transcript_file = temp_file.parent / (temp_file.stem + "_transcript.txt")
         summary_file = temp_file.parent / (temp_file.stem + "_summary.md")
         
-        transcript_file.write_text(transcript, encoding='utf-8')
-        summary_file.write_text(summary, encoding='utf-8')
-        
-        st.success("Files saved:")
-        st.write(f"Transcript: {transcript_file}")
-        st.write(f"Summary: {summary_file}")
+        try:
+            # Clean text before saving to prevent encoding issues
+            clean_transcript = transcript.encode('utf-8', errors='ignore').decode('utf-8')
+            clean_summary = summary.encode('utf-8', errors='ignore').decode('utf-8')
+            
+            transcript_file.write_text(clean_transcript, encoding='utf-8')
+            summary_file.write_text(clean_summary, encoding='utf-8')
+            
+            st.success("Files saved:")
+            st.write(f"Transcript: {transcript_file}")
+            st.write(f"Summary: {summary_file}")
+        except Exception as e:
+            st.warning(f"⚠️ File saving failed: {e}")
+            st.info("Files were not saved to disk, but you can copy the content above.")

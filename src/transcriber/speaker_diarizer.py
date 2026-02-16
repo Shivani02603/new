@@ -5,7 +5,8 @@ Uses a combination of silence detection and speaker change detection.
 
 import json
 import wave
-import numpy as np
+import numpy as np  
+import re
 from typing import List, Dict, Tuple
 import vosk
 from pathlib import Path
@@ -21,6 +22,24 @@ class SpeakerDiarizer:
         self.model = vosk.Model(model_path)
         self.rec = vosk.KaldiRecognizer(self.model, 16000)
         self.rec.SetWords(True)  # Enable word-level timestamps
+    
+    def _clean_text(self, text: str) -> str:
+        """Clean text to remove invalid Unicode characters and surrogates"""
+        if not text:
+            return ""
+        
+        try:
+            # Remove or replace surrogate characters
+            cleaned = text.encode('utf-8', errors='ignore').decode('utf-8')
+            # Remove control characters except newlines and tabs
+            cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', cleaned)
+            # Normalize whitespace
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            return cleaned
+        except Exception as e:
+            print(f"Warning: Text cleaning failed: {e}")
+            # Fallback: keep only ASCII characters
+            return ''.join(char for char in text if ord(char) < 128).strip()
     
     def detect_speaker_changes(self, audio_file: str, min_segment_duration: float = 3.0) -> List[Dict]:
         """
@@ -180,6 +199,24 @@ class SimpleSpeakerDiarizer:
     def __init__(self, model_path: str):
         self.model = vosk.Model(model_path)
     
+    def _clean_text(self, text: str) -> str:
+        """Clean text to remove invalid Unicode characters and surrogates"""
+        if not text:
+            return ""
+        
+        try:
+            # Remove or replace surrogate characters
+            cleaned = text.encode('utf-8', errors='ignore').decode('utf-8')
+            # Remove control characters except newlines and tabs
+            cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', cleaned)
+            # Normalize whitespace
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            return cleaned
+        except Exception as e:
+            print(f"Warning: Text cleaning failed: {e}")
+            # Fallback: keep only ASCII characters
+            return ''.join(char for char in text if ord(char) < 128).strip()
+    
     def transcribe_with_speakers(self, audio_file: str, energy_threshold: float = 0.3) -> Dict:
         """
         Simple speaker detection using energy levels and pauses
@@ -231,32 +268,43 @@ class SimpleSpeakerDiarizer:
                 break
                 
             if rec.AcceptWaveform(data):
-                result = json.loads(rec.Result())
-                text = result.get('text', '').strip()
-                if text:
-                    # Estimate time based on processed data
-                    estimated_time = len(transcript_parts) * 0.25  # Rough estimate
-                    
-                    # Check if we should change speaker based on our energy analysis
-                    time_window = int(estimated_time)
-                    if time_window in speaker_changes and len(segments) > 0:
-                        current_speaker += 1
-                    
-                    segments.append({
-                        'speaker': f'Speaker {current_speaker}',
-                        'text': text,
-                        'estimated_time': estimated_time
-                    })
-                    transcript_parts.append(text)
+                try:
+                    result = json.loads(rec.Result())
+                    text = result.get('text', '').strip()
+                    if text:
+                        clean_text = self._clean_text(text)
+                        if clean_text:  # Only process non-empty cleaned text
+                            # Estimate time based on processed data
+                            estimated_time = len(transcript_parts) * 0.25  # Rough estimate
+                            
+                            # Check if we should change speaker based on our energy analysis
+                            time_window = int(estimated_time)
+                            if time_window in speaker_changes and len(segments) > 0:
+                                current_speaker += 1
+                            
+                            segments.append({
+                                'speaker': f'Speaker {current_speaker}',
+                                'text': clean_text,
+                                'estimated_time': estimated_time
+                            })
+                            transcript_parts.append(clean_text)
+                except (json.JSONDecodeError, UnicodeError) as e:
+                    print(f"Warning: Skipping invalid speaker result: {e}")
+                    continue
         
         # Get final result
-        final_result = json.loads(rec.FinalResult())
-        if final_result.get('text', '').strip():
-            segments.append({
-                'speaker': f'Speaker {current_speaker}',
-                'text': final_result['text'],
-                'estimated_time': len(transcript_parts) * 0.25
-            })
+        try:
+            final_result = json.loads(rec.FinalResult())
+            if final_result.get('text', '').strip():
+                clean_final_text = self._clean_text(final_result['text'])
+                if clean_final_text:
+                    segments.append({
+                        'speaker': f'Speaker {current_speaker}',
+                        'text': clean_final_text,
+                        'estimated_time': len(transcript_parts) * 0.25
+                    })
+        except (json.JSONDecodeError, UnicodeError) as e:
+            print(f"Warning: Final speaker result parsing failed: {e}")
         
         wf.close()
         
@@ -269,7 +317,9 @@ class SimpleSpeakerDiarizer:
             if segment['speaker'] != current_speaker_name:
                 # Finalize previous speaker
                 if current_speaker_text:
-                    full_transcript += f"{current_speaker_name}:\n{' '.join(current_speaker_text)}\n\n"
+                    speaker_text = ' '.join(current_speaker_text)
+                    clean_speaker_text = self._clean_text(speaker_text)
+                    full_transcript += f"{current_speaker_name}:\n{clean_speaker_text}\n\n"
                 
                 # Start new speaker
                 current_speaker_name = segment['speaker']
@@ -279,10 +329,12 @@ class SimpleSpeakerDiarizer:
         
         # Add final speaker
         if current_speaker_text:
-            full_transcript += f"{current_speaker_name}:\n{' '.join(current_speaker_text)}"
+            speaker_text = ' '.join(current_speaker_text)
+            clean_speaker_text = self._clean_text(speaker_text)
+            full_transcript += f"{current_speaker_name}:\n{clean_speaker_text}"
         
         return {
-            'full_transcript': full_transcript.strip(),
+            'full_transcript': self._clean_text(full_transcript.strip()),
             'segments': segments,
             'speaker_count': current_speaker,
             'method': 'energy_based_simple'
